@@ -1602,6 +1602,52 @@ gmw_udisks_object_removed_cb (GDBusObjectManager *object_manager,
 }
 
 static void
+gmw_udisks_object_changed_cb (GDBusObjectManagerClient *object_manager,
+                              GDBusObjectProxy *object_proxy,
+                              GDBusProxy *interface_proxy,
+                              GVariant *changed_properties,
+                              const gchar* const *invalidated_properties,
+                              GmwPrivate *priv)
+{
+	GmwDevice *device;
+	guint i;
+	const gchar *tmp;
+	GVariantIter *iter;
+	const gchar *property_name;
+	GVariant *value;
+	guint64 size;
+
+	g_variant_get (changed_properties, "a{sv}", &iter);
+	while (g_variant_iter_next(iter, "{&sv}", &property_name, &value)) {
+		if (g_strcmp0 (property_name, "Size") == 0) {
+			/*
+			 * Size change - determine if the device should be added
+			 * or removed from the list
+			 */
+			size = g_variant_get_uint64 (value);
+			if (!size) {
+				/* Remove the device if it is in the list */
+				tmp = g_dbus_object_get_object_path (G_DBUS_OBJECT (object_proxy));
+				for (i = 0; i < priv->devices->len; i++) {
+					device = g_ptr_array_index (priv->devices, i);
+					if (g_strcmp0 (gmw_device_get_object_path (device), tmp) == 0) {
+						g_ptr_array_remove (priv->devices, device);
+					}
+				}
+			} else {
+				/* Determine if we should add the device */
+				tmp = g_dbus_object_get_object_path (G_DBUS_OBJECT (object_proxy));
+				gmw_udisks_object_add (priv, G_DBUS_OBJECT (object_proxy));
+			}
+
+			gmw_device_list_sort (priv);
+			gmw_update_max_threads (priv);
+			gmw_refresh_ui (priv);
+		}
+	}
+}
+
+static void
 gmw_udisks_client_connect_cb (GObject *source_object,
 			      GAsyncResult *res,
 			      gpointer user_data)
@@ -1622,6 +1668,9 @@ gmw_udisks_client_connect_cb (GObject *source_object,
 			  G_CALLBACK (gmw_udisks_object_added_cb), priv);
 	g_signal_connect (object_manager, "object-removed",
 			  G_CALLBACK (gmw_udisks_object_removed_cb), priv);
+	g_signal_connect (object_manager, "interface-proxy-properties-changed",
+	                  G_CALLBACK (gmw_udisks_object_changed_cb), priv);
+
 	objects = g_dbus_object_manager_get_objects (object_manager);
 	for (l = objects; l != NULL; l = l->next)
 		gmw_udisks_object_add (priv, G_DBUS_OBJECT (l->data));
